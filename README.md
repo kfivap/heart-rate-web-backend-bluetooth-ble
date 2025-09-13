@@ -1,5 +1,6 @@
 # Heart Rate Monitor Web Application
 ## Test/study web app made with AI
+Code not fully reviewed but works good enough for vibecoding project with Samsung S25 phone + Coospo Heart rate monitor
 
 A real-time heart rate monitoring web application that connects to Bluetooth heart rate devices and displays live data with interactive charts.
 
