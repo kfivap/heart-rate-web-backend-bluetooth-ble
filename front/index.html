@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Тест пульсометра через Web Bluetooth</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      margin: 20px; 
+      background-color: #f5f5f5;
+    }
+    .container { 
+      max-width: 1200px; 
+      margin: 0 auto; 
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    input, button { 
+      margin: 5px; 
+      padding: 8px; 
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    button {
+      background-color: #007bff;
+      color: white;
+      cursor: pointer;
+      border: none;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    .user-list { margin-top: 20px; }
+    .user-item { 
+      background: #f8f9fa; 
+      padding: 15px; 
+      margin: 10px 0; 
+      border-radius: 8px; 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center;
+      border-left: 4px solid #007bff;
+    }
+    .error { 
+      background: #ffebee; 
+      color: #c62828; 
+      padding: 10px; 
+      border-radius: 5px; 
+      margin: 10px 0; 
+    }
+    .success { 
+      background: #e8f5e8; 
+      color: #2e7d32; 
+      padding: 10px; 
+      border-radius: 5px; 
+      margin: 10px 0; 
+    }
+    .chart-container { 
+      margin: 20px 0; 
+      background: white; 
+      padding: 20px; 
+      border-radius: 10px; 
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      position: relative;
+    }
+    .chart-title { 
+      font-size: 18px; 
+      font-weight: bold; 
+      margin-bottom: 15px; 
+      color: #333;
+      text-align: center;
+    }
+    .chart-wrapper {
+      position: relative;
+      height: 400px;
+      width: 100%;
+    }
+    .user-controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .chart-section {
+      margin-top: 30px;
+    }
+    .no-data {
+      text-align: center;
+      color: #666;
+      font-style: italic;
+      padding: 40px;
+      background: #f8f9fa;
+      border-radius: 8px;
+    }
+    .close-chart {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: #dc3545;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    .close-chart:hover {
+      background: #c82333;
+    }
+    .auto-update-indicator {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: #28a745;
+      color: white;
+      padding: 5px 10px;
+      border-radius: 15px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .auto-update-indicator.disabled {
+      background: #6c757d;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>❤️ Мониторинг пульса</h1>
+    
+    <div>
+      <input type="text" id="userName" placeholder="Введите ваше имя" />
+      <button id="connect">Подключить пульсометр</button>
+    </div>
+    
+    <p id="status">⏳ Не подключено</p>
+    <p id="pulse">❤️ Пульс: ---</p>
+    
+    <div id="apiStatus"></div>
+    
+    <div class="user-list">
+      <h3>📊 Данные всех пользователей:</h3>
+      <div id="usersList">Загрузка...</div>
+    </div>
+
+    <div class="chart-section">
+      <h3>📈 Графики пульса</h3>
+      <div id="chartsContainer">
+        <div class="no-data">Выберите пользователя для просмотра графика</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Автоматическое определение URL API
+    const getApiUrl = () => {
+      return '/api'
+    };
+    
+    const API_URL = getApiUrl();
+    let currentHeartRate = null;
+    let userName = '';
+    let charts = {}; // Хранилище для графиков
+    let currentChartUser = null; // Текущий открытый график
+    let chartUpdateInterval = null; // Интервал автообновления графика
+
+    // Проверка доступности API
+    async function checkApiStatus() {
+      try {
+        const response = await fetch(`${API_URL}/health`, {
+          method: 'GET',
+          mode: 'cors',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        });
+        
+        if (response.ok) {
+          document.getElementById('apiStatus').innerHTML = 
+            '<div class="success">✅ API сервер доступен</div>';
+          return true;
+        } else {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      } catch (err) {
+        console.error('Ошибка подключения к API:', err);
+        
+        let errorMessage = '❌ Ошибка подключения к API серверу';
+        document.getElementById('apiStatus').innerHTML = 
+          `<div class="error">${errorMessage}</div>`;
+        return false;
+      }
+    }
+
+    // Загрузить список всех пользователей
+    async function loadUsers() {
+      try {
+        const response = await fetch(`${API_URL}/users`, {
+          method: 'GET',
+          mode: 'cors',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const users = await response.json();
+        
+        const usersList = document.getElementById('usersList');
+        if (Object.keys(users).length === 0) {
+          usersList.innerHTML = 'Пока нет данных о пульсе';
+          return;
+        }
+        
+        usersList.innerHTML = Object.values(users)
+          .map(user => `
+            <div class="user-item">
+              <div>
+                <strong>${user.name}</strong>: ${user.lastHeartRate || '---'} уд/мин 
+                <small>(${user.lastUpdate ? new Date(user.lastUpdate).toLocaleString() : 'нет данных'})</small>
+              </div>
+              <div class="user-controls">
+                <button onclick="showChart('${user.name}')">📈 График</button>
+                <button onclick="showChart('${user.name}', 100)">📊 Полная история</button>
+                <button onclick="closeChart()">❌ Закрыть</button>
+              </div>
+            </div>
+          `).join('');
+      } catch (err) {
+        console.error('Ошибка загрузки пользователей:', err);
+        document.getElementById('usersList').innerHTML = 
+          '<div class="error">Ошибка загрузки данных. Проверьте подключение к серверу.</div>';
+      }
+    }
+
+    // Запустить автообновление графика
+    function startChartAutoUpdate() {
+      if (chartUpdateInterval) {
+        clearInterval(chartUpdateInterval);
+      }
+      
+      chartUpdateInterval = setInterval(() => {
+        if (currentChartUser) {
+          updateChart(currentChartUser);
+          console.log(`🔄 Автообновление графика для ${currentChartUser}`);
+        }
+      }, 10000); // Каждые 10 секунд
+      
+      console.log('✅ Автообновление графика запущено (каждые 10 сек)');
+    }
+
+    // Остановить автообновление графика
+    function stopChartAutoUpdate() {
+      if (chartUpdateInterval) {
+        clearInterval(chartUpdateInterval);
+        chartUpdateInterval = null;
+        console.log('⏹️ Автообновление графика остановлено');
+      }
+    }
+
+    // Закрыть график
+    function closeChart() {
+      if (currentChartUser && charts[currentChartUser]) {
+        charts[currentChartUser].destroy();
+        delete charts[currentChartUser];
+      }
+      currentChartUser = null;
+      stopChartAutoUpdate(); // Останавливаем автообновление
+      document.getElementById('chartsContainer').innerHTML = 
+        '<div class="no-data">Выберите пользователя для просмотра графика</div>';
+    }
+
+    // Показать график пульса пользователя
+    async function showChart(userName, limit = 50) {
+      try {
+        const response = await fetch(`${API_URL}/users/${encodeURIComponent(userName)}/history?limit=${limit}`, {
+          method: 'GET',
+          mode: 'cors',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (!data.history || data.history.length === 0) {
+          document.getElementById('chartsContainer').innerHTML = 
+            `<div class="no-data">Нет данных для пользователя ${userName}</div>`;
+          return;
+        }
+
+        // Закрываем предыдущий график если он есть
+        closeChart();
+
+        // Подготавливаем данные для графика
+        const labels = data.history.map(item => 
+          new Date(item.timestamp).toLocaleTimeString()
+        );
+        const heartRates = data.history.map(item => item.heartRate);
+
+        // Создаем контейнер для графика
+        const chartContainer = document.createElement('div');
+        chartContainer.className = 'chart-container';
+        chartContainer.innerHTML = `
+          <div class="auto-update-indicator" id="autoUpdateIndicator">🔄 Автообновление</div>
+          <button class="close-chart" onclick="closeChart()">×</button>
+          <div class="chart-title">📈 График пульса: ${userName} (${data.count} измерений)</div>
+          <div class="chart-wrapper">
+            <canvas id="chart-${userName}"></canvas>
+          </div>
+        `;
+
+        document.getElementById('chartsContainer').innerHTML = '';
+        document.getElementById('chartsContainer').appendChild(chartContainer);
+
+        // Создаем график
+        const ctx = document.getElementById(`chart-${userName}`).getContext('2d');
+        charts[userName] = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: 'Пульс (уд/мин)',
+              data: heartRates,
+              borderColor: '#e74c3c',
+              backgroundColor: 'rgba(231, 76, 60, 0.1)',
+              borderWidth: 2,
+              fill: true,
+              tension: 0.4,
+              pointRadius: 3,
+              pointHoverRadius: 6
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+              intersect: false,
+              mode: 'index'
+            },
+            scales: {
+              y: {
+                beginAtZero: false,
+                min: Math.max(40, Math.min(...heartRates) - 10),
+                max: Math.min(200, Math.max(...heartRates) + 10),
+                title: {
+                  display: true,
+                  text: 'Пульс (уд/мин)'
+                },
+                grid: {
+                  color: 'rgba(0,0,0,0.1)'
+                }
+              },
+              x: {
+                title: {
+                  display: true,
+                  text: 'Время'
+                },
+                grid: {
+                  color: 'rgba(0,0,0,0.1)'
+                }
+              }
+            },
+            plugins: {
+              legend: {
+                display: true,
+                position: 'top'
+              },
+              tooltip: {
+                callbacks: {
+                  label: function(context) {
+                    return `Пульс: ${context.parsed.y} уд/мин`;
+                  },
+                  title: function(context) {
+                    return `Время: ${context[0].label}`;
+                  }
+                }
+              }
+            }
+          }
+        });
+
+        currentChartUser = userName;
+        
+        // Запускаем автообновление графика
+        startChartAutoUpdate();
+
+      } catch (err) {
+        console.error('Ошибка загрузки истории:', err);
+        document.getElementById('chartsContainer').innerHTML = 
+          `<div class="error">Ошибка загрузки графика для ${userName}</div>`;
+      }
+    }
+
+    // Обновить график новыми данными
+    async function updateChart(userName) {
+      if (!currentChartUser || currentChartUser !== userName) {
+        return; // График не открыт для этого пользователя
+      }
+
+      try {
+        const response = await fetch(`${API_URL}/users/${encodeURIComponent(userName)}/history?limit=50`, {
+          method: 'GET',
+          mode: 'cors',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        });
+        
+        if (!response.ok) {
+          return;
+        }
+        
+        const data = await response.json();
+        
+        if (!data.history || data.history.length === 0) {
+          return;
+        }
+
+        // Обновляем данные графика
+        const labels = data.history.map(item => 
+          new Date(item.timestamp).toLocaleTimeString()
+        );
+        const heartRates = data.history.map(item => item.heartRate);
+
+        charts[userName].data.labels = labels;
+        charts[userName].data.datasets[0].data = heartRates;
+        
+        // Обновляем масштаб
+        charts[userName].options.scales.y.min = Math.max(40, Math.min(...heartRates) - 10);
+        charts[userName].options.scales.y.max = Math.min(200, Math.max(...heartRates) + 10);
+        
+        charts[userName].update('none'); // Обновляем без анимации
+        
+        // Обновляем заголовок с количеством измерений
+        const chartTitle = document.querySelector('.chart-title');
+        if (chartTitle) {
+          chartTitle.textContent = `📈 График пульса: ${userName} (${data.count} измерений)`;
+        }
+
+        console.log(`📊 График обновлен: ${data.count} измерений`);
+
+      } catch (err) {
+        console.error('Ошибка обновления графика:', err);
+      }
+    }
+
+    // Сохранить пульс пользователя
+    async function saveHeartRate(name, heartRate) {
+      try {
+        const response = await fetch(`${API_URL}/heart-rate`, {
+          method: 'POST',
+          mode: 'cors',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ name, heartRate })
+        });
+        
+        if (response.ok) {
+          console.log('Пульс сохранен:', name, heartRate);
+          loadUsers(); // Обновить список
+          
+          // Обновляем график если он открыт для этого пользователя
+          updateChart(name);
+        } else {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      } catch (err) {
+        console.error('Ошибка сохранения:', err);
+      }
+    }
+
+    async function connectHeartRate() {
+      userName = document.getElementById('userName').value.trim();
+      if (!userName) {
+        alert('Пожалуйста, введите ваше имя');
+        return;
+      }
+
+      try {
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ services: ['heart_rate'] }]
+        });
+
+        document.getElementById("status").textContent = "🔗 Подключение...";
+
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService('heart_rate');
+        const characteristic = await service.getCharacteristic('heart_rate_measurement');
+
+        characteristic.addEventListener('characteristicvaluechanged', event => {
+          const value = event.target.value;
+          const flags = value.getUint8(0);
+          let heartRate;
+          if (flags & 0x01) {
+            heartRate = value.getUint16(1, true);
+          } else {
+            heartRate = value.getUint8(1);
+          }
+          
+          currentHeartRate = heartRate;
+          document.getElementById("pulse").textContent = `❤️ Пульс: ${heartRate} уд/мин`;
+          
+          // Сохраняем пульс на сервере
+          saveHeartRate(userName, heartRate);
+          
+          console.log("Pulse:", heartRate);
+        });
+
+        await characteristic.startNotifications();
+        document.getElementById("status").textContent = "✅ Подключено к " + device.name;
+
+      } catch (err) {
+        console.error(err);
+        document.getElementById("status").textContent = "❌ Ошибка: " + err;
+      }
+    }
+
+    // Инициализация
+    document.getElementById("connect").addEventListener("click", connectHeartRate);
+    
+    // Проверяем API и загружаем пользователей при загрузке страницы
+    checkApiStatus().then(apiOk => {
+      if (apiOk) {
+        loadUsers();
+        // Обновляем список каждые 5 секунд
+        setInterval(loadUsers, 5000);
+      }
+    });
+  </script>
+</body>
+</html>
